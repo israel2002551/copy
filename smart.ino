@@ -390,12 +390,16 @@ void handleSensorError() {
 
 // ================= NETWORKING & MQTT =================
 void setupWiFi() {
-  delay(10);
+  delay(100);
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(WIFI_SSID);
+  Serial.flush();
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false); // Disable Wi-Fi modem sleep to prevent voltage oscillation
+  WiFi.setTxPower(WIFI_POWER_11dBm); // Cap transmit power to prevent 400mA current spikes
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   int retries = 0;
@@ -407,7 +411,7 @@ void setupWiFi() {
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("");
-    Serial.println("WiFi connected");
+    Serial.println("WiFi connected!");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
   } else {
