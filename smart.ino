@@ -37,7 +37,9 @@ const char* PREF_NAMESPACE = "smartfan";
 #define IN2_PIN 27
 
 // Compatibility for ESP32 Arduino Core 2.x and 3.x
-#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  #define USE_ESP32_CORE_V3 1
+#elif defined(ESP_ARDUINO_VERSION) && (ESP_ARDUINO_VERSION >= 0x030000)
   #define USE_ESP32_CORE_V3 1
 #else
   #define USE_ESP32_CORE_V3 0
@@ -45,7 +47,8 @@ const char* PREF_NAMESPACE = "smartfan";
 #endif
 
 // ================= PERIPHERALS =================
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+LiquidCrystal_I2C* lcd = nullptr;
+bool lcdAvailable = false;
 DHT dht(DHTPIN, DHTTYPE);
 
 // Custom degree symbol character for LCD
@@ -115,31 +118,57 @@ void handleSensorError();
 // ================= SETUP =================
 void setup() {
   Serial.begin(115200);
-  delay(100);
-  Serial.println("\n[SYSTEM] Initializing Smart Fan System...");
+  delay(300);
 
-  // LCD Initialization
+  Serial.println("\n===========================================");
+  Serial.println("   AeroSync Pro ESP32 Smart Fan System     ");
+  Serial.println("===========================================");
+
+  // STEP 1: I2C Bus & LCD Auto-Detection (Safe with timeout to prevent boot hang)
+  Serial.println("[BOOT 1/6] Scanning I2C bus on GPIO 21 (SDA) / 22 (SCL)...");
   Wire.begin(21, 22);
-  lcd.init();
-  lcd.backlight();
-  lcd.createChar(0, degreeChar);
-  lcd.setCursor(0, 0);
-  lcd.print("Smart Fan v2.0");
-  lcd.setCursor(0, 1);
-  lcd.print("Booting...");
+  Wire.setTimeOut(50); // Set 50ms timeout to prevent lockup if SDA/SCL are floating or unconnected
 
-  // DHT & Analog Input
+  uint8_t detectedLcdAddr = 0;
+  Wire.beginTransmission(0x27);
+  if (Wire.endTransmission() == 0) {
+    detectedLcdAddr = 0x27;
+  } else {
+    Wire.beginTransmission(0x3F);
+    if (Wire.endTransmission() == 0) {
+      detectedLcdAddr = 0x3F;
+    }
+  }
+
+  if (detectedLcdAddr != 0) {
+    Serial.printf("[BOOT 1/6] LCD detected at I2C address 0x%02X.\n", detectedLcdAddr);
+    lcd = new LiquidCrystal_I2C(detectedLcdAddr, 16, 2);
+    lcd->init();
+    lcd->backlight();
+    lcd->createChar(0, degreeChar);
+    lcd->setCursor(0, 0);
+    lcd->print("Smart Fan v2.0");
+    lcd->setCursor(0, 1);
+    lcd->print("Booting...");
+    lcdAvailable = true;
+  } else {
+    Serial.println("[BOOT 1/6] No LCD found at 0x27 or 0x3F. Continuing in headless mode.");
+    lcdAvailable = false;
+  }
+
+  // STEP 2: DHT & Analog Input
+  Serial.println("[BOOT 2/6] Initializing DHT22 and Analog Input...");
   dht.begin();
   analogReadResolution(12);
   analogSetPinAttenuation(AIR_SENSOR_PIN, ADC_11db);
 
-  // Motor Driver Pins
+  // STEP 3: Motor Driver Pins & PWM
+  Serial.println("[BOOT 3/6] Setting up Motor Driver Pins & PWM...");
   pinMode(IN1_PIN, OUTPUT);
   pinMode(IN2_PIN, OUTPUT);
   digitalWrite(IN1_PIN, LOW);
   digitalWrite(IN2_PIN, LOW);
 
-  // PWM Initialization (Core 2.x & 3.x compatible)
 #if USE_ESP32_CORE_V3
   ledcAttach(ENA_PIN, 5000, 8);
   ledcWrite(ENA_PIN, 0);
@@ -149,30 +178,40 @@ void setup() {
   ledcWrite(PWM_CHANNEL, 0);
 #endif
 
-  // Buzzer Pin
+  // STEP 4: Buzzer Pin
+  Serial.println("[BOOT 4/6] Initializing Buzzer Pin...");
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // Initialize NVS Preferences and restore saved state
-  preferences.begin(PREF_NAMESPACE, false);
-  uint8_t savedMode = preferences.getUChar("mode", (uint8_t)MODE_AUTO);
-  currentMode = (savedMode == (uint8_t)MODE_MANUAL) ? MODE_MANUAL : MODE_AUTO;
-  manualSpeedTarget = preferences.getInt("speed", 0);
-  autoThresholdTemp = preferences.getFloat("auto_th", 27.0);
+  // STEP 5: Initialize NVS Preferences and restore saved state
+  Serial.println("[BOOT 5/6] Restoring saved states from NVS Flash...");
+  if (preferences.begin(PREF_NAMESPACE, false)) {
+    uint8_t savedMode = preferences.getUChar("mode", (uint8_t)MODE_AUTO);
+    currentMode = (savedMode == (uint8_t)MODE_MANUAL) ? MODE_MANUAL : MODE_AUTO;
+    manualSpeedTarget = preferences.getInt("speed", 0);
+    autoThresholdTemp = preferences.getFloat("auto_th", 27.0);
 
-  Serial.printf("[NVS] Loaded -> Mode: %s | Speed: %d | AutoThresh: %.1fC\n",
-                (currentMode == MODE_AUTO) ? "AUTO" : "MANUAL",
-                manualSpeedTarget,
-                autoThresholdTemp);
+    Serial.printf("[NVS] Restored -> Mode: %s | Manual Speed: %d | Auto Threshold: %.1fC\n",
+                  (currentMode == MODE_AUTO) ? "AUTO" : "MANUAL",
+                  manualSpeedTarget,
+                  autoThresholdTemp);
+  } else {
+    Serial.println("[NVS] Warning: Preferences init failed, using default parameters.");
+  }
 
-  // Wi-Fi & MQTT Configuration
+  // STEP 6: Wi-Fi & MQTT Configuration
+  Serial.println("[BOOT 6/6] Configuring Wi-Fi & MQTT Client...");
   setupWiFi();
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setKeepAlive(15);
   mqttClient.setSocketTimeout(3); // Non-blocking socket timeout
 
-  lcd.clear();
+  if (lcdAvailable && lcd != nullptr) {
+    lcd->clear();
+  }
+
+  Serial.println("[SYSTEM] System initialization complete. Entering main loop.\n");
 }
 
 // ================= LOOP =================
@@ -309,6 +348,8 @@ void handleBuzzer(float temp, unsigned long currentMillis) {
 
 // ================= DISPLAY =================
 void updateDisplay(float temp, float hum, int speed, int airPercent) {
+  if (!lcdAvailable || lcd == nullptr) return;
+
   char modeChar = (currentMode == MODE_AUTO) ? 'A' : 'M';
   char netChar  = mqttClient.connected() ? '*' : (WiFi.status() == WL_CONNECTED ? 'w' : 'x');
 
@@ -316,8 +357,8 @@ void updateDisplay(float temp, float hum, int speed, int airPercent) {
   char line0[17];
   snprintf(line0, sizeof(line0), "%c %4.1f%cC H:%2.0f%% %c",
            modeChar, temp, (char)0, hum, netChar);
-  lcd.setCursor(0, 0);
-  lcd.print(line0);
+  lcd->setCursor(0, 0);
+  lcd->print(line0);
 
   // Line 1: Speed PWM and Air Pollution
   char line1[17];
@@ -326,16 +367,18 @@ void updateDisplay(float temp, float hum, int speed, int airPercent) {
   } else {
     snprintf(line1, sizeof(line1), "PWM:%-3d Air:%2d%%  ", speed, airPercent);
   }
-  lcd.setCursor(0, 1);
-  lcd.print(line1);
+  lcd->setCursor(0, 1);
+  lcd->print(line1);
 }
 
 void handleSensorError() {
   applyMotorSpeed(0);
-  lcd.setCursor(0, 0);
-  lcd.print("! SENSOR ERROR !");
-  lcd.setCursor(0, 1);
-  lcd.print("Fan Halted Safely");
+  if (lcdAvailable && lcd != nullptr) {
+    lcd->setCursor(0, 0);
+    lcd->print("! SENSOR ERROR !");
+    lcd->setCursor(0, 1);
+    lcd->print("Fan Halted Safely");
+  }
   Serial.println("[ERR] Persistent DHT22 failure! Motor halted for safety.");
 }
 
@@ -345,7 +388,7 @@ void setupWiFi() {
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("[WiFi] Connecting");
+  Serial.printf("[WiFi] Connecting to \"%s\"", WIFI_SSID);
 
   int retries = 0;
   while (WiFi.status() != WL_CONNECTED && retries < 20) {
