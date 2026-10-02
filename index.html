@@ -3,199 +3,1942 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Fan Controller</title>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <meta name="description" content="Next-Generation Smart IoT Fan Controller & Telemetry Dashboard with Real-Time Environmental Sensing, MQTT Control, and Dynamic Telemetry Analytics.">
+  <title>AeroSync Pro | Smart Fan & Climate Control</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2300f2fe'><circle cx='12' cy='12' r='10'/></svg>">
+
+  <!-- Google Fonts: Plus Jakarta Sans & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- MQTT.js and Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
   <style>
     :root {
-      --bg: #0f172a;
-      --card-bg: #1e293b;
-      --accent: #38bdf8;
-      --accent-hover: #0284c7;
-      --text: #f8fafc;
+      --bg-dark: #07090e;
+      --bg-surface: rgba(15, 23, 42, 0.72);
+      --bg-surface-elevated: rgba(30, 41, 59, 0.75);
+      --bg-card: rgba(18, 26, 47, 0.65);
+      --bg-card-border: rgba(99, 102, 241, 0.18);
+      --bg-card-border-glow: rgba(56, 189, 248, 0.35);
+
+      --primary: #00f2fe;
+      --primary-gradient: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+      --accent-purple: #8b5cf6;
+      --accent-purple-gradient: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+      
+      --text-main: #f8fafc;
       --text-muted: #94a3b8;
+      --text-dim: #64748b;
+
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.25);
+      --warning: #f59e0b;
+      --warning-glow: rgba(245, 158, 11, 0.25);
       --danger: #ef4444;
-      --success: #22c55e;
-      --border: #334155;
+      --danger-glow: rgba(239, 68, 68, 0.35);
+
+      --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.3);
+      --shadow-lg: 0 16px 36px -8px rgba(0, 0, 0, 0.5), 0 0 24px rgba(0, 242, 254, 0.08);
+      --radius-sm: 10px;
+      --radius-md: 16px;
+      --radius-lg: 24px;
+      --radius-full: 9999px;
+
+      --fan-speed-duration: 0s;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background-color: var(--bg); color: var(--text); padding: 24px 16px; display: flex; justify-content: center; }
-    .container { width: 100%; max-width: 580px; display: flex; flex-direction: column; gap: 20px; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
 
-    header { display: flex; justify-content: space-between; align-items: center; }
-    h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.5px; }
-    .badge { padding: 4px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
-    .badge-offline { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
-    .badge-online { background: rgba(34, 197, 94, 0.2); color: var(--success); }
-    .indicator { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    body {
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.09) 0%, transparent 45%),
+        radial-gradient(circle at 85% 75%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
+        radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.5) 0%, transparent 100%);
+      background-attachment: fixed;
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 48px;
+      overflow-x: hidden;
+    }
 
-    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
-    .card-title { font-size: 0.85rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 14px; }
+    .app-wrapper {
+      width: 100%;
+      max-width: 1200px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
 
-    .telemetry-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-    .stat-box { background: rgba(15, 23, 42, 0.5); padding: 14px; border-radius: 10px; border: 1px solid var(--border); }
-    .stat-label { font-size: 0.8rem; color: var(--text-muted); }
-    .stat-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+    /* TOP NAVBAR */
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-surface);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--bg-card-border);
+      border-radius: var(--radius-lg);
+      padding: 16px 24px;
+      box-shadow: var(--shadow-sm);
+    }
 
-    .mode-switch { display: flex; background: rgba(15, 23, 42, 0.6); padding: 4px; border-radius: 10px; border: 1px solid var(--border); margin-bottom: 18px; }
-    .mode-btn { flex: 1; border: none; background: transparent; color: var(--text-muted); padding: 10px; font-size: 0.9rem; font-weight: 600; cursor: pointer; border-radius: 8px; transition: all 0.2s ease; }
-    .mode-btn.active { background: var(--accent); color: #000; box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3); }
+    .brand-area {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
 
-    .slider-container { display: flex; flex-direction: column; gap: 8px; }
-    .slider-header { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted); }
-    input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; height: 6px; }
-    input[type=range]:disabled { opacity: 0.35; cursor: not-allowed; }
+    .brand-logo-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: var(--primary-gradient);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #050b14;
+      box-shadow: 0 0 16px rgba(0, 242, 254, 0.4);
+    }
 
-    .warning-bar { background: rgba(239, 68, 68, 0.2); border: 1px solid var(--danger); color: var(--danger); padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; display: none; margin-top: 10px; text-align: center; }
+    .brand-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-subtitle {
+      font-size: 0.76rem;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Status Pills */
+    .status-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(10, 15, 30, 0.7);
+      padding: 6px 14px;
+      border-radius: var(--radius-full);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 0.8rem;
+    }
+
+    .status-indicator {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 8px var(--danger);
+      transition: all 0.3s ease;
+    }
+
+    .status-indicator.active {
+      background: var(--success);
+      box-shadow: 0 0 10px var(--success);
+      animation: pulseGreen 2s infinite;
+    }
+
+    .status-indicator.connecting {
+      background: var(--warning);
+      box-shadow: 0 0 8px var(--warning);
+    }
+
+    @keyframes pulseGreen {
+      0%, 100% { box-shadow: 0 0 6px var(--success); }
+      50% { box-shadow: 0 0 14px var(--success); }
+    }
+
+    .icon-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+      padding: 9px 12px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+
+    .icon-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: var(--primary);
+      transform: translateY(-1px);
+    }
+
+    /* ALERT BANNER */
+    .alarm-banner {
+      background: linear-gradient(90deg, rgba(239, 68, 68, 0.22) 0%, rgba(220, 38, 38, 0.35) 50%, rgba(239, 68, 68, 0.22) 100%);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius-md);
+      padding: 14px 20px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      animation: bannerGlow 1.6s infinite alternate ease-in-out;
+      box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+    }
+
+    .alarm-banner.visible {
+      display: flex;
+    }
+
+    @keyframes bannerGlow {
+      from { box-shadow: 0 0 10px rgba(239, 68, 68, 0.2); }
+      to { box-shadow: 0 0 24px rgba(239, 68, 68, 0.5); }
+    }
+
+    .alarm-content {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #fecaca;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .alarm-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* MAIN GRID LAYOUT */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 24px;
+    }
+
+    @media (max-width: 960px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* GLASS CARD BASE */
+    .glass-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--bg-card-border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      box-shadow: var(--shadow-sm);
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .glass-card:hover {
+      border-color: var(--bg-card-border-glow);
+    }
+
+    .card-header-flex {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .card-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.05rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      letter-spacing: -0.2px;
+    }
+
+    .card-title svg {
+      color: var(--primary);
+    }
+
+    .card-subtext {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+    }
+
+    /* LEFT HERO: ANIMATED FAN STAGE */
+    .fan-stage-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+    }
+
+    .fan-visual-container {
+      position: relative;
+      width: 250px;
+      height: 250px;
+      margin: 12px 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .fan-halo-ring {
+      position: absolute;
+      width: 240px;
+      height: 240px;
+      border-radius: 50%;
+      border: 2px dashed rgba(56, 189, 248, 0.25);
+      box-shadow: 0 0 35px rgba(0, 242, 254, 0.12), inset 0 0 25px rgba(0, 242, 254, 0.08);
+      transition: all 0.5s ease;
+    }
+
+    .fan-halo-ring.running {
+      border-color: var(--primary);
+      box-shadow: 0 0 45px rgba(0, 242, 254, 0.35), inset 0 0 30px rgba(0, 242, 254, 0.2);
+    }
+
+    .fan-halo-ring.turbo {
+      border-color: #f59e0b;
+      box-shadow: 0 0 50px rgba(245, 158, 11, 0.4), inset 0 0 35px rgba(245, 158, 11, 0.25);
+    }
+
+    .fan-blade-svg {
+      width: 190px;
+      height: 190px;
+      filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.6));
+      animation: spinBlade var(--fan-speed-duration) linear infinite;
+      transform-origin: center center;
+    }
+
+    @keyframes spinBlade {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .fan-center-cap {
+      position: absolute;
+      width: 58px;
+      height: 58px;
+      background: radial-gradient(circle, #1e293b 0%, #0a0f1d 100%);
+      border: 2px solid var(--primary);
+      border-radius: 50%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+      z-index: 5;
+    }
+
+    .center-pct {
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    .center-lbl {
+      font-size: 0.55rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .fan-metrics-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+
+    .metric-chip {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 10px 8px;
+      border-radius: var(--radius-sm);
+      text-align: center;
+    }
+
+    .metric-chip-label {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      font-weight: 600;
+      margin-bottom: 3px;
+    }
+
+    .metric-chip-value {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    /* CONTROL PANEL STYLES */
+    .mode-tab-bar {
+      display: flex;
+      background: rgba(10, 15, 30, 0.8);
+      border: 1px solid var(--bg-card-border);
+      border-radius: var(--radius-md);
+      padding: 5px;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+
+    .mode-tab-btn {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 10px 14px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .mode-tab-btn.active {
+      background: var(--primary-gradient);
+      color: #050b14;
+      font-weight: 700;
+      box-shadow: 0 4px 14px rgba(0, 242, 254, 0.35);
+    }
+
+    /* Slider section */
+    .slider-box {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+
+    .slider-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      font-size: 0.85rem;
+    }
+
+    .slider-title {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .slider-badge {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      color: var(--primary);
+      font-size: 1rem;
+    }
+
+    .custom-range {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 8px;
+      border-radius: var(--radius-full);
+      background: linear-gradient(90deg, #1e293b 0%, #334155 100%);
+      outline: none;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .custom-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 3px solid #00f2fe;
+      box-shadow: 0 0 12px rgba(0, 242, 254, 0.6);
+      cursor: pointer;
+      transition: transform 0.15s ease;
+    }
+
+    .custom-range::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+    }
+
+    .custom-range:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    /* Preset Quick Buttons */
+    .preset-btn-group {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+      width: 100%;
+    }
+
+    .preset-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 7px 4px;
+      font-size: 0.76rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .preset-chip:hover:not(:disabled) {
+      background: rgba(0, 242, 254, 0.15);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .preset-chip.active {
+      background: rgba(0, 242, 254, 0.25);
+      border-color: var(--primary);
+      color: var(--primary);
+      box-shadow: 0 0 8px rgba(0, 242, 254, 0.3);
+    }
+
+    .preset-chip:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    /* RIGHT COLUMN: TELEMETRY SENSORS & ANALYTICS */
+    .right-column {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .telemetry-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    .sensor-card {
+      background: var(--bg-card);
+      border: 1px solid var(--bg-card-border);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+
+    .sensor-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--bg-card-border-glow);
+    }
+
+    .sensor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .sensor-icon-wrapper {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .sensor-icon-temp { background: rgba(244, 63, 94, 0.15); color: #fb7185; }
+    .sensor-icon-hum { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+    .sensor-icon-air { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+    .sensor-icon-mode { background: rgba(139, 92, 246, 0.15); color: #a78bfa; }
+
+    .sensor-badge {
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: var(--radius-full);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .sensor-value-large {
+      font-family: 'Outfit', sans-serif;
+      font-size: 2.1rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin: 4px 0 6px;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+
+    .sensor-value-unit {
+      font-size: 1.05rem;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .sensor-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      padding-top: 8px;
+      margin-top: 4px;
+    }
+
+    .meter-bar-track {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0 4px;
+    }
+
+    .meter-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+
+    /* CHART SECTION */
+    .chart-container-box {
+      width: 100%;
+      height: 240px;
+      position: relative;
+      margin-top: 12px;
+    }
+
+    .chart-legend-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      align-items: center;
+    }
+
+    .legend-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    /* SYSTEM DIAGNOSTICS & LOG */
+    .diagnostics-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      background: rgba(10, 15, 30, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: var(--radius-md);
+      padding: 14px 18px;
+    }
+
+    .diag-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .diag-label {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .diag-value {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    /* SETTINGS MODAL */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      padding: 16px;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+      opacity: 1;
+    }
+
+    .modal-dialog {
+      background: #0f172a;
+      border: 1px solid var(--primary);
+      box-shadow: 0 0 35px rgba(0, 242, 254, 0.2);
+      border-radius: var(--radius-lg);
+      width: 100%;
+      max-width: 480px;
+      padding: 28px;
+      transform: translateY(20px);
+      transition: transform 0.25s ease;
+    }
+
+    .modal-overlay.open .modal-dialog {
+      transform: translateY(0);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .modal-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .form-input {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .form-input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 8px rgba(0, 242, 254, 0.3);
+    }
+
+    .modal-btn-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: var(--text-main);
+      padding: 10px 18px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 600;
+    }
+
+    .btn-primary {
+      background: var(--primary-gradient);
+      border: none;
+      color: #050b14;
+      padding: 10px 20px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 700;
+      box-shadow: 0 4px 12px rgba(0, 242, 254, 0.3);
+    }
+
+    .btn-primary:hover {
+      box-shadow: 0 6px 18px rgba(0, 242, 254, 0.5);
+    }
+
+    /* FOOTER */
+    footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 8px 0;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      margin-top: 12px;
+    }
+
+    /* TOAST NOTIFICATION */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+
+    .toast-msg {
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--primary);
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: var(--radius-md);
+      font-size: 0.85rem;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      animation: slideInToast 0.3s ease forwards;
+    }
+
+    @keyframes slideInToast {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
   </style>
 </head>
 <body>
 
-<div class="container">
-  <header>
-    <h1>Smart Fan System</h1>
-    <span id="connStatus" class="badge badge-offline"><span class="indicator"></span> Disconnected</span>
+<div class="app-wrapper">
+  <!-- TOP NAVIGATION BAR -->
+  <header class="top-nav">
+    <div class="brand-area">
+      <div class="brand-logo-icon">
+        <!-- Propeller Fan SVG Logo -->
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v3.1c1.24.47 2.13 1.58 2.37 2.9H18v2h-2.63c-.24 1.32-1.13 2.43-2.37 2.9V19h-2v-3.1c-1.24-.47-2.13-1.58-2.37-2.9H6v-2h2.63c.24-1.32 1.13-2.43 2.37-2.9V7z"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title">AeroSync Pro</h1>
+        <div class="brand-subtitle" id="deviceSubtitle">ESP32 Smart Fan Station &bull; DEVICE123</div>
+      </div>
+    </div>
+
+    <div class="nav-actions">
+      <!-- Broker & Device Status Indicators -->
+      <div class="status-group" title="MQTT Broker Connection Status">
+        <span id="brokerIndicator" class="status-indicator"></span>
+        <span id="brokerStatusText">Broker Offline</span>
+      </div>
+
+      <div class="status-group" title="ESP32 Hardware Online/Offline (LWT)">
+        <span id="deviceIndicator" class="status-indicator"></span>
+        <span id="deviceStatusText">Device Offline</span>
+      </div>
+
+      <!-- Settings Button -->
+      <button class="icon-btn" onclick="openSettingsModal()" id="btnOpenSettings" title="Configure MQTT & Device ID">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        Settings
+      </button>
+    </div>
   </header>
 
-  <!-- Live Telemetry Card -->
-  <div class="card">
-    <div class="card-title">Live Sensor Data</div>
-    <div class="telemetry-grid">
-      <div class="stat-box">
-        <div class="stat-label">Temperature</div>
-        <div class="stat-value" id="valTemp">--.- &deg;C</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-label">Air Pollution</div>
-        <div class="stat-value" id="valAir">-- %</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-label">Fan PWM Speed</div>
-        <div class="stat-value" id="valSpeed">--</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-label">System Mode</div>
-        <div class="stat-value" id="valMode" style="color: var(--accent);">AUTO</div>
+  <!-- ALARM & EMERGENCY WARNING BANNER -->
+  <div id="alarmBanner" class="alarm-banner">
+    <div class="alarm-content">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+        <line x1="12" y1="9" x2="12" y2="13"></line>
+        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+      </svg>
+      <div>
+        <strong>CRITICAL HEAT ALARM TRIGGERED (&ge; 30.0&deg;C)</strong>
+        <div style="font-size: 0.8rem; opacity: 0.85;">Hardware safety buzzer active. Fan cooling at maximum velocity.</div>
       </div>
     </div>
-    <div id="alarmBanner" class="warning-bar">Over-Temperature Alarm Triggered (&ge; 30&deg;C)</div>
+    <div class="alarm-actions">
+      <button class="icon-btn" style="background: rgba(239, 68, 68, 0.4); border-color: #ef4444;" onclick="sendBuzzerCommand('mute')">
+        Silence Alarm
+      </button>
+    </div>
   </div>
 
-  <!-- Fan Control Card -->
-  <div class="card">
-    <div class="card-title">Fan Control</div>
-    <div class="mode-switch">
-      <button id="btnAuto" class="mode-btn active" onclick="setMode('AUTO')">Automatic</button>
-      <button id="btnManual" class="mode-btn" onclick="setMode('MANUAL')">Manual</button>
+  <!-- SENSOR ERROR BANNER -->
+  <div id="sensorErrorBanner" class="alarm-banner" style="background: linear-gradient(90deg, rgba(245, 158, 11, 0.25), rgba(245, 158, 11, 0.4)); border-color: #f59e0b; display: none;">
+    <div class="alarm-content" style="color: #fef3c7;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <div>
+        <strong>DHT22 SENSOR ALERT</strong>
+        <div style="font-size: 0.8rem; opacity: 0.9;">Sensor read fault detected on hardware. Motor operating in safe halt state.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN DASHBOARD CONTENT GRID -->
+  <main class="dashboard-grid">
+    <!-- LEFT COLUMN: FAN VISUALIZER & DIRECT CONTROLLER -->
+    <div class="glass-card fan-stage-card">
+      <div class="card-header-flex" style="width: 100%;">
+        <div class="card-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"></path>
+          </svg>
+          Active Impeller Status
+        </div>
+        <span id="fanActivityState" class="sensor-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">Idle</span>
+      </div>
+
+      <!-- Animated Fan SVG Stage -->
+      <div class="fan-visual-container">
+        <div class="fan-halo-ring" id="fanHalo"></div>
+        
+        <!-- 5-Blade Aerodynamic Rotor SVG -->
+        <svg class="fan-blade-svg" id="fanBlade" viewBox="0 0 200 200">
+          <defs>
+            <linearGradient id="bladeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#00f2fe" />
+              <stop offset="60%" stop-color="#2563eb" />
+              <stop offset="100%" stop-color="#1e1b4b" />
+            </linearGradient>
+            <radialGradient id="hubGrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#38bdf8" />
+              <stop offset="100%" stop-color="#0f172a" />
+            </radialGradient>
+          </defs>
+          <!-- 5 Aerodynamic Curved Fan Blades -->
+          <g transform="translate(100, 100)">
+            <!-- Blade 1 (0 deg) -->
+            <path d="M 0, -12 C 18, -45 52, -75 42, -92 C 32, -98 8, -80 -8, -50 C -12, -35 -8, -20 0, -12 Z" fill="url(#bladeGrad)" opacity="0.95"/>
+            <!-- Blade 2 (72 deg) -->
+            <path d="M 0, -12 C 18, -45 52, -75 42, -92 C 32, -98 8, -80 -8, -50 C -12, -35 -8, -20 0, -12 Z" fill="url(#bladeGrad)" opacity="0.95" transform="rotate(72)"/>
+            <!-- Blade 3 (144 deg) -->
+            <path d="M 0, -12 C 18, -45 52, -75 42, -92 C 32, -98 8, -80 -8, -50 C -12, -35 -8, -20 0, -12 Z" fill="url(#bladeGrad)" opacity="0.95" transform="rotate(144)"/>
+            <!-- Blade 4 (216 deg) -->
+            <path d="M 0, -12 C 18, -45 52, -75 42, -92 C 32, -98 8, -80 -8, -50 C -12, -35 -8, -20 0, -12 Z" fill="url(#bladeGrad)" opacity="0.95" transform="rotate(216)"/>
+            <!-- Blade 5 (288 deg) -->
+            <path d="M 0, -12 C 18, -45 52, -75 42, -92 C 32, -98 8, -80 -8, -50 C -12, -35 -8, -20 0, -12 Z" fill="url(#bladeGrad)" opacity="0.95" transform="rotate(288)"/>
+          </g>
+        </svg>
+
+        <div class="fan-center-cap">
+          <span class="center-pct" id="fanRotorPct">0%</span>
+          <span class="center-lbl" id="fanRotorState">OFF</span>
+        </div>
+      </div>
+
+      <!-- Quick Metrics Strip -->
+      <div class="fan-metrics-strip">
+        <div class="metric-chip">
+          <div class="metric-chip-label">PWM Output</div>
+          <div class="metric-chip-value" id="valPwmSpeed">0 / 255</div>
+        </div>
+        <div class="metric-chip">
+          <div class="metric-chip-label">RPM (Est.)</div>
+          <div class="metric-chip-value" id="valRpm">0 RPM</div>
+        </div>
+        <div class="metric-chip">
+          <div class="metric-chip-label">Drive Mode</div>
+          <div class="metric-chip-value" id="valModeBadge" style="color: var(--primary);">AUTO</div>
+        </div>
+      </div>
+
+      <!-- Mode Selector Tabs -->
+      <div class="mode-tab-bar">
+        <button id="tabAuto" class="mode-tab-btn active" onclick="setMode('AUTO')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+          </svg>
+          Automatic (Thermostatic)
+        </button>
+        <button id="tabManual" class="mode-tab-btn" onclick="setMode('MANUAL')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="4" y1="21" x2="4" y2="14"></line>
+            <line x1="4" y1="10" x2="4" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12" y2="3"></line>
+            <line x1="20" y1="21" x2="20" y2="16"></line>
+            <line x1="20" y1="12" x2="20" y2="3"></line>
+            <circle cx="4" cy="12" r="2"></circle>
+            <circle cx="12" cy="10" r="2"></circle>
+            <circle cx="20" cy="14" r="2"></circle>
+          </svg>
+          Manual Override
+        </button>
+      </div>
+
+      <!-- Manual Speed Controls (Active in Manual Mode) -->
+      <div id="manualControlsArea" class="slider-box" style="display: none;">
+        <div class="slider-header-row">
+          <span class="slider-title">Manual Throttle Setting</span>
+          <span class="slider-badge" id="sliderValueText">0 (0%)</span>
+        </div>
+        <input type="range" id="manualSpeedSlider" class="custom-range" min="0" max="255" value="0"
+               oninput="onManualSliderLive(this.value)" onchange="sendManualSpeed(this.value)">
+        
+        <div class="preset-btn-group" style="margin-top: 14px;">
+          <button class="preset-chip" onclick="applyPreset(0)">0% Off</button>
+          <button class="preset-chip" onclick="applyPreset(64)">25%</button>
+          <button class="preset-chip" onclick="applyPreset(128)">50%</button>
+          <button class="preset-chip" onclick="applyPreset(192)">75%</button>
+          <button class="preset-chip" onclick="applyPreset(255)">100%</button>
+        </div>
+      </div>
+
+      <!-- Auto Thermostat Threshold Controls (Active in Auto Mode) -->
+      <div id="autoControlsArea" class="slider-box">
+        <div class="slider-header-row">
+          <span class="slider-title">Thermostat Target Setpoint</span>
+          <span class="slider-badge" id="autoThreshValueText">27.0 &deg;C</span>
+        </div>
+        <input type="range" id="autoThreshSlider" class="custom-range" min="20" max="35" step="0.5" value="27"
+               oninput="onAutoThreshLive(this.value)" onchange="sendAutoThreshold(this.value)">
+        <div style="font-size: 0.76rem; color: var(--text-dim); margin-top: 8px; line-height: 1.4;">
+          The fan automatically spins up when ambient temperature reaches this threshold, scaling to full throttle at 32&deg;C.
+        </div>
+      </div>
+
+      <!-- Quick Action Utilities -->
+      <div style="display: flex; gap: 8px; width: 100%; margin-top: 8px;">
+        <button class="icon-btn" style="flex: 1; justify-content: center;" onclick="sendBuzzerCommand('test')" title="Trigger a brief 1-second test beep on hardware buzzer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+          </svg>
+          Test Buzzer
+        </button>
+        <button class="icon-btn" style="flex: 1; justify-content: center;" onclick="toggleTempUnit()">
+          Unit: <span id="lblUnitSwitch" style="color: var(--primary); font-weight: 700;">&deg;C</span>
+        </button>
+      </div>
     </div>
 
-    <div class="slider-container">
-      <div class="slider-header">
-        <span>Manual Speed Adjust</span>
-        <span id="speedDisplay">0 / 255</span>
+    <!-- RIGHT COLUMN: ENVIRONMENTAL SENSORS & ANALYTICS -->
+    <div class="right-column">
+      <!-- Environmental Sensor Cards Grid -->
+      <div class="telemetry-cards-grid">
+        <!-- Temperature Card -->
+        <div class="sensor-card">
+          <div class="sensor-header">
+            <div>
+              <div class="card-subtext">Ambient Temperature</div>
+              <div class="sensor-value-large" id="cardTempVal">--.- <span class="sensor-value-unit" id="unitSymbol">&deg;C</span></div>
+            </div>
+            <div class="sensor-icon-wrapper sensor-icon-temp">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"></path>
+              </svg>
+            </div>
+          </div>
+          <div class="meter-bar-track">
+            <div class="meter-bar-fill" id="tempMeterBar" style="width: 50%; background: linear-gradient(90deg, #38bdf8, #fb7185);"></div>
+          </div>
+          <div class="sensor-footer">
+            <span id="tempStatusText">Reading telemetry...</span>
+            <span id="tempComfortBadge" class="sensor-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">Comfortable</span>
+          </div>
+        </div>
+
+        <!-- Relative Humidity Card -->
+        <div class="sensor-card">
+          <div class="sensor-header">
+            <div>
+              <div class="card-subtext">Relative Humidity</div>
+              <div class="sensor-value-large" id="cardHumVal">--.- <span class="sensor-value-unit">%</span></div>
+            </div>
+            <div class="sensor-icon-wrapper sensor-icon-hum">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
+              </svg>
+            </div>
+          </div>
+          <div class="meter-bar-track">
+            <div class="meter-bar-fill" id="humMeterBar" style="width: 50%; background: linear-gradient(90deg, #00f2fe, #3b82f6);"></div>
+          </div>
+          <div class="sensor-footer">
+            <span id="heatIndexText">Heat Index: --&deg;C</span>
+            <span id="humStatusBadge" class="sensor-badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;">Optimal</span>
+          </div>
+        </div>
+
+        <!-- Air Quality / Pollution Card -->
+        <div class="sensor-card">
+          <div class="sensor-header">
+            <div>
+              <div class="card-subtext">Air Quality & Pollution</div>
+              <div class="sensor-value-large" id="cardAirVal">-- <span class="sensor-value-unit">%</span></div>
+            </div>
+            <div class="sensor-icon-wrapper sensor-icon-air">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M6 12h12M4 18h16M8 6h8"></path>
+              </svg>
+            </div>
+          </div>
+          <div class="meter-bar-track">
+            <div class="meter-bar-fill" id="airMeterBar" style="width: 15%; background: linear-gradient(90deg, #10b981, #f59e0b);"></div>
+          </div>
+          <div class="sensor-footer">
+            <span id="airStatusText">Clean & Healthy</span>
+            <span id="airStatusBadge" class="sensor-badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981;">Clean</span>
+          </div>
+        </div>
       </div>
-      <input type="range" id="speedSlider" min="0" max="255" value="0" disabled oninput="onSliderInput(this.value)" onchange="sendManualSpeed(this.value)">
+
+      <!-- Real-Time Telemetry Analytics Chart Card -->
+      <div class="glass-card">
+        <div class="card-header-flex">
+          <div>
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+              </svg>
+              Live Telemetry Analytics
+            </div>
+            <div class="card-subtext">Dynamic 60-second rolling trend recording</div>
+          </div>
+          <div class="chart-legend-row">
+            <div class="legend-pill" onclick="toggleDataset(0)"><span class="legend-dot" style="background: #fb7185;"></span> Temperature</div>
+            <div class="legend-pill" onclick="toggleDataset(1)"><span class="legend-dot" style="background: #38bdf8;"></span> Humidity</div>
+            <div class="legend-pill" onclick="toggleDataset(2)"><span class="legend-dot" style="background: #34d399;"></span> Air Pollution</div>
+            <div class="legend-pill" onclick="toggleDataset(3)"><span class="legend-dot" style="background: #a855f7;"></span> Fan Speed %</div>
+          </div>
+        </div>
+
+        <div class="chart-container-box">
+          <canvas id="telemetryChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Hardware Diagnostics Strip -->
+      <div class="diagnostics-strip">
+        <div class="diag-item">
+          <span class="diag-label">Wi-Fi Signal (RSSI)</span>
+          <span class="diag-value" id="diagWifiRssi">-- dBm</span>
+        </div>
+        <div class="diag-item">
+          <span class="diag-label">Microcontroller Uptime</span>
+          <span class="diag-value" id="diagUptime">--:--:--</span>
+        </div>
+        <div class="diag-item">
+          <span class="diag-label">MQTT Round-Trip</span>
+          <span class="diag-value" id="diagPing">&lt; 35 ms</span>
+        </div>
+        <div class="diag-item">
+          <span class="diag-label">Sensor Diagnostics</span>
+          <span class="diag-value" id="diagSensorState" style="color: var(--success);">Normal</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- FOOTER -->
+  <footer>
+    <div>AeroSync Pro IoT Fan System &bull; Version 2.4.0</div>
+    <div>Connected via Secure WebSockets MQTT &bull; EMQX Public Broker</div>
+  </footer>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div id="settingsModal" class="modal-overlay">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h3 class="modal-title">Connection & Device Configuration</h3>
+      <button class="icon-btn" onclick="closeSettingsModal()" style="padding: 6px 10px;">&times;</button>
+    </div>
+    
+    <div class="form-group">
+      <label class="form-label" for="cfgDeviceId">ESP32 Device Identifier</label>
+      <input type="text" id="cfgDeviceId" class="form-input" value="DEVICE123" placeholder="e.g. DEVICE123, my-bedroom-fan">
+      <div style="font-size: 0.73rem; color: var(--text-dim); margin-top: 4px;">Must exactly match the DEVICE_ID defined in smart.ino</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="cfgBrokerUrl">MQTT WebSocket URL</label>
+      <input type="text" id="cfgBrokerUrl" class="form-input" value="wss://broker.emqx.io:8084/mqtt" placeholder="wss://broker.emqx.io:8084/mqtt">
+      <div style="font-size: 0.73rem; color: var(--text-dim); margin-top: 4px;">Standard SSL WebSocket endpoint for browser MQTT</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="cfgTempUnit">Default Temperature Unit</label>
+      <select id="cfgTempUnit" class="form-input">
+        <option value="C">Celsius (&deg;C)</option>
+        <option value="F">Fahrenheit (&deg;F)</option>
+      </select>
+    </div>
+
+    <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.05); padding: 12px; border-radius: var(--radius-sm); border: 1px solid rgba(255,255,255,0.1);">
+      <div>
+        <label class="form-label" for="cfgSimMode" style="margin-bottom: 2px; cursor: pointer;">Live Simulation Mode</label>
+        <div style="font-size: 0.72rem; color: var(--text-dim);">Generate realistic simulated telemetry when ESP32 is offline</div>
+      </div>
+      <input type="checkbox" id="cfgSimMode" style="width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer;">
+    </div>
+
+    <div class="modal-btn-row">
+      <button class="btn-secondary" onclick="closeSettingsModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveSettingsAndReconnect()">Save & Reconnect</button>
     </div>
   </div>
 </div>
 
-<script>
-  // MUST match the topics in your ESP32 code!
-  const TOPIC_STATUS = "smartfan/DEVICE123/status";
-  const TOPIC_SET    = "smartfan/DEVICE123/set";
+<!-- TOAST CONTAINER -->
+<div id="toastBox" class="toast-container"></div>
 
+<!-- SOUND SYNTHESIZER & CONTROLLER SCRIPT -->
+<script>
+  /* ================= CONFIGURATION & LOCAL STORAGE ================= */
+  const DEFAULT_CONFIG = {
+    deviceId: "DEVICE123",
+    brokerUrl: "wss://broker.emqx.io:8084/mqtt",
+    unit: "C",
+    simMode: false
+  };
+
+  let config = { ...DEFAULT_CONFIG };
+  try {
+    const saved = localStorage.getItem("aerosync_config");
+    if (saved) config = { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+  } catch (e) {
+    console.warn("localStorage unavailable:", e);
+  }
+
+  /* ================= SYSTEM STATE ================= */
   let client = null;
   let activeMode = "AUTO";
+  let currentPwm = 0;
+  let currentRawTempC = 25.0;
+  let currentRawHumidity = 50.0;
+  let currentRawAir = 0;
+  let isHardwareOnline = false;
+  let lastMessageTimestamp = 0;
 
-  function initMQTT() {
-    const brokerUrl = "wss://broker.emqx.io:8084/mqtt";
-    const clientId = "WebClient-" + Math.random().toString(16).substr(2, 8);
+  /* Topics computed dynamically from Device ID */
+  function getTopicStatus()       { return `smartfan/${config.deviceId}/status`; }
+  function getTopicSet()          { return `smartfan/${config.deviceId}/set`; }
+  function getTopicAvailability() { return `smartfan/${config.deviceId}/availability`; }
 
-    client = mqtt.connect(brokerUrl, {
-      clientId: clientId,
-      clean: true,
-      connectTimeout: 4000
-    });
+  /* ================= AUDIO EFFECTS (WEB AUDIO API) ================= */
+  let audioCtx = null;
+  function getAudioContext() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+  }
 
-    const statusBadge = document.getElementById("connStatus");
+  function playUiBeep(freq = 880, type = "sine", duration = 0.08) {
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === "suspended") ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(0.04, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    } catch (e) {}
+  }
 
-    client.on("connect", () => {
-      statusBadge.className = "badge badge-online";
-      statusBadge.innerHTML = '<span class="indicator"></span> Connected';
-      client.subscribe(TOPIC_STATUS);
-    });
+  /* ================= TOAST NOTIFICATION ================= */
+  function showToast(message) {
+    const container = document.getElementById("toastBox");
+    const toast = document.createElement("div");
+    toast.className = "toast-msg";
+    toast.innerText = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = "0";
+      toast.style.transition = "opacity 0.4s";
+      setTimeout(() => toast.remove(), 400);
+    }, 3200);
+  }
 
-    client.on("error", () => {
-      statusBadge.className = "badge badge-offline";
-      statusBadge.innerHTML = '<span class="indicator"></span> Error';
-    });
+  /* ================= CHART.JS TELEMETRY GRAPH ================= */
+  let telemetryChart = null;
+  const MAX_CHART_POINTS = 30;
 
-    client.on("offline", () => {
-      statusBadge.className = "badge badge-offline";
-      statusBadge.innerHTML = '<span class="indicator"></span> Disconnected';
-    });
+  function initChart() {
+    const ctx = document.getElementById("telemetryChart").getContext("2d");
+    
+    // Gradients for charts
+    const gradTemp = ctx.createLinearGradient(0, 0, 0, 200);
+    gradTemp.addColorStop(0, "rgba(251, 113, 133, 0.35)");
+    gradTemp.addColorStop(1, "rgba(251, 113, 133, 0.0)");
 
-    client.on("message", (topic, payload) => {
-      if (topic === TOPIC_STATUS) {
-        try {
-          const data = JSON.parse(payload.toString());
-          updateUI(data);
-        } catch (e) {
-          console.error("Invalid JSON:", e);
+    const gradHum = ctx.createLinearGradient(0, 0, 0, 200);
+    gradHum.addColorStop(0, "rgba(56, 189, 248, 0.3)");
+    gradHum.addColorStop(1, "rgba(56, 189, 248, 0.0)");
+
+    telemetryChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Temperature",
+            borderColor: "#fb7185",
+            backgroundColor: gradTemp,
+            data: [],
+            borderWidth: 2,
+            tension: 0.35,
+            fill: true,
+            pointRadius: 2,
+            yAxisID: "y"
+          },
+          {
+            label: "Humidity",
+            borderColor: "#38bdf8",
+            backgroundColor: gradHum,
+            data: [],
+            borderWidth: 2,
+            tension: 0.35,
+            fill: true,
+            pointRadius: 2,
+            yAxisID: "y"
+          },
+          {
+            label: "Air Pollution",
+            borderColor: "#34d399",
+            backgroundColor: "transparent",
+            data: [],
+            borderWidth: 2,
+            borderDash: [4, 4],
+            tension: 0.35,
+            pointRadius: 2,
+            yAxisID: "yPercent"
+          },
+          {
+            label: "Fan Speed %",
+            borderColor: "#a855f7",
+            backgroundColor: "transparent",
+            data: [],
+            borderWidth: 2.5,
+            tension: 0.2,
+            pointRadius: 3,
+            yAxisID: "yPercent"
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 400 },
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "rgba(15, 23, 42, 0.95)",
+            borderColor: "rgba(99, 102, 241, 0.3)",
+            borderWidth: 1,
+            titleColor: "#f8fafc",
+            bodyColor: "#94a3b8"
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: "rgba(255, 255, 255, 0.04)" },
+            ticks: { color: "#64748b", font: { size: 10 } }
+          },
+          y: {
+            type: "linear",
+            position: "left",
+            grid: { color: "rgba(255, 255, 255, 0.05)" },
+            ticks: { color: "#94a3b8", font: { size: 10 } },
+            suggestedMin: 15,
+            suggestedMax: 40
+          },
+          yPercent: {
+            type: "linear",
+            position: "right",
+            grid: { drawOnChartArea: false },
+            ticks: { color: "#64748b", font: { size: 10 }, callback: v => v + "%" },
+            min: 0,
+            max: 100
+          }
         }
       }
     });
   }
 
-  function updateUI(data) {
-    document.getElementById("valTemp").innerHTML = `${data.temp} &deg;C`;
-    document.getElementById("valAir").innerText = `${data.air} %`;
-    document.getElementById("valSpeed").innerText = `${data.speed} (${Math.round((data.speed/255)*100)}%)`;
-    document.getElementById("valMode").innerText = data.mode;
+  function pushChartData(timeStr, tempVal, humVal, airVal, fanPctVal) {
+    if (!telemetryChart) return;
+    
+    // Convert temp based on selected unit
+    const displayTemp = (config.unit === "F") ? (tempVal * 9/5) + 32 : tempVal;
 
-    // Toggle alarm banner
-    document.getElementById("alarmBanner").style.display = data.alarm ? "block" : "none";
+    telemetryChart.data.labels.push(timeStr);
+    telemetryChart.data.datasets[0].data.push(Number(displayTemp.toFixed(1)));
+    telemetryChart.data.datasets[1].data.push(Number(humVal.toFixed(1)));
+    telemetryChart.data.datasets[2].data.push(Number(airVal));
+    telemetryChart.data.datasets[3].data.push(Number(fanPctVal));
 
-    // Synchronize UI mode state with actual device state
-    if (data.mode !== activeMode) {
-      applyModeUI(data.mode);
+    if (telemetryChart.data.labels.length > MAX_CHART_POINTS) {
+      telemetryChart.data.labels.shift();
+      telemetryChart.data.datasets.forEach(ds => ds.data.shift());
+    }
+
+    telemetryChart.update("none");
+  }
+
+  function toggleDataset(index) {
+    const isVisible = telemetryChart.isDatasetVisible(index);
+    telemetryChart.setDatasetVisibility(index, !isVisible);
+    telemetryChart.update();
+  }
+
+  /* ================= MQTT NETWORKING ================= */
+  function connectMQTT() {
+    if (client) {
+      try { client.end(true); } catch (e) {}
+    }
+
+    const brokerBadge = document.getElementById("brokerIndicator");
+    const brokerText = document.getElementById("brokerStatusText");
+    const deviceBadge = document.getElementById("deviceIndicator");
+    const deviceText = document.getElementById("deviceStatusText");
+
+    brokerBadge.className = "status-indicator connecting";
+    brokerText.innerText = "Connecting...";
+
+    const clientId = "AeroSyncWeb-" + Math.random().toString(16).substring(2, 10);
+
+    try {
+      client = mqtt.connect(config.brokerUrl, {
+        clientId: clientId,
+        clean: true,
+        connectTimeout: 5000,
+        reconnectPeriod: 3000
+      });
+    } catch (err) {
+      brokerBadge.className = "status-indicator";
+      brokerText.innerText = "Connection Failed";
+      showToast("MQTT connect error: " + err.message);
+      return;
+    }
+
+    client.on("connect", () => {
+      brokerBadge.className = "status-indicator active";
+      brokerText.innerText = "Broker Connected";
+      showToast("Connected to EMQX Broker");
+
+      // Subscribe to telemetry and device availability (LWT)
+      client.subscribe(getTopicStatus());
+      client.subscribe(getTopicAvailability());
+    });
+
+    client.on("error", (err) => {
+      brokerBadge.className = "status-indicator";
+      brokerText.innerText = "Broker Error";
+    });
+
+    client.on("offline", () => {
+      brokerBadge.className = "status-indicator";
+      brokerText.innerText = "Broker Offline";
+      setDeviceOnlineState(false);
+    });
+
+    client.on("message", (topic, payload) => {
+      const msgStr = payload.toString().trim();
+
+      // 1. Availability Topic (LWT from ESP32)
+      if (topic === getTopicAvailability()) {
+        const isOnline = (msgStr === "online");
+        setDeviceOnlineState(isOnline);
+      }
+
+      // 2. Status Telemetry Topic
+      else if (topic === getTopicStatus()) {
+        try {
+          const data = JSON.parse(msgStr);
+          setDeviceOnlineState(true);
+          updateTelemetryUI(data);
+        } catch (e) {
+          console.error("Malformed JSON payload:", e);
+        }
+      }
+    });
+  }
+
+  function setDeviceOnlineState(online) {
+    isHardwareOnline = online;
+    const badge = document.getElementById("deviceIndicator");
+    const text = document.getElementById("deviceStatusText");
+
+    if (online) {
+      badge.className = "status-indicator active";
+      text.innerText = "Hardware Online";
+    } else {
+      badge.className = "status-indicator";
+      text.innerText = "Hardware Offline";
     }
   }
 
-  function setMode(mode) {
-    applyModeUI(mode);
-    const payload = JSON.stringify({ mode: mode });
-    client.publish(TOPIC_SET, payload);
+  /* ================= TELEMETRY UI DISPATCHER ================= */
+  function updateTelemetryUI(data) {
+    lastMessageTimestamp = Date.now();
+    currentRawTempC = Number(data.temp) || currentRawTempC;
+    currentRawHumidity = Number(data.humidity) || currentRawHumidity;
+    currentRawAir = Number(data.air) || currentRawAir;
+    currentPwm = (data.speed !== undefined) ? Number(data.speed) : currentPwm;
+
+    // 1. Temperatures display
+    renderTemperature(currentRawTempC);
+
+    // 2. Humidity & Heat Index display
+    renderHumidity(currentRawHumidity, currentRawTempC);
+
+    // 3. Air Pollution display
+    renderAirQuality(currentRawAir);
+
+    // 4. Fan Blade animation and metrics
+    const speedPct = Math.round((currentPwm / 255) * 100);
+    renderFanRotor(currentPwm, speedPct);
+
+    // 5. Diagnostics
+    if (data.wifi_rssi !== undefined) {
+      document.getElementById("diagWifiRssi").innerText = `${data.wifi_rssi} dBm`;
+    }
+    if (data.uptime !== undefined) {
+      const h = Math.floor(data.uptime / 3600);
+      const m = Math.floor((data.uptime % 3600) / 60);
+      const s = data.uptime % 60;
+      document.getElementById("diagUptime").innerText = `${h}h ${m}m ${s}s`;
+    }
+    if (data.sensor_ok !== undefined) {
+      const banner = document.getElementById("sensorErrorBanner");
+      const diagBadge = document.getElementById("diagSensorState");
+      if (data.sensor_ok) {
+        banner.style.display = "none";
+        diagBadge.innerText = "Normal";
+        diagBadge.style.color = "var(--success)";
+      } else {
+        banner.style.display = "flex";
+        diagBadge.innerText = "Sensor Fault";
+        diagBadge.style.color = "var(--warning)";
+      }
+    }
+
+    // 6. Over-Temperature Hardware Alarm
+    const alarmBanner = document.getElementById("alarmBanner");
+    if (data.alarm) {
+      alarmBanner.classList.add("visible");
+    } else {
+      alarmBanner.classList.remove("visible");
+    }
+
+    // 7. Auto setpoint reflection
+    if (data.target_temp !== undefined) {
+      document.getElementById("autoThreshSlider").value = data.target_temp;
+      document.getElementById("autoThreshValueText").innerHTML = `${Number(data.target_temp).toFixed(1)} &deg;C`;
+    }
+
+    // 8. Mode synchronization
+    if (data.mode && data.mode !== activeMode) {
+      syncModeTabs(data.mode);
+    }
+
+    // 9. Chart entry
+    const timeLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    pushChartData(timeLabel, currentRawTempC, currentRawHumidity, currentRawAir, speedPct);
   }
 
-  function applyModeUI(mode) {
+  /* ================= SUB-RENDERERS ================= */
+  function renderTemperature(tempC) {
+    const isF = (config.unit === "F");
+    const val = isF ? (tempC * 9/5) + 32 : tempC;
+    const unit = isF ? "&deg;F" : "&deg;C";
+
+    document.getElementById("cardTempVal").innerHTML = `${val.toFixed(1)} <span class="sensor-value-unit">${unit}</span>`;
+
+    // Meter bar percentage (based on 15°C to 40°C)
+    const meterPct = Math.min(Math.max(((tempC - 15) / 25) * 100, 0), 100);
+    document.getElementById("tempMeterBar").style.width = `${meterPct}%`;
+
+    const badge = document.getElementById("tempComfortBadge");
+    const statusText = document.getElementById("tempStatusText");
+
+    if (tempC >= 30.0) {
+      badge.style.background = "rgba(239, 68, 68, 0.25)";
+      badge.style.color = "#ef4444";
+      badge.innerText = "High Alert";
+      statusText.innerText = "Thermal Alarm Zone";
+    } else if (tempC >= 27.0) {
+      badge.style.background = "rgba(245, 158, 11, 0.25)";
+      badge.style.color = "#f59e0b";
+      badge.innerText = "Warm";
+      statusText.innerText = "Cooling Active";
+    } else {
+      badge.style.background = "rgba(16, 185, 129, 0.25)";
+      badge.style.color = "#10b981";
+      badge.innerText = "Comfortable";
+      statusText.innerText = "Optimal Range";
+    }
+  }
+
+  function renderHumidity(hum, tempC) {
+    document.getElementById("cardHumVal").innerHTML = `${hum.toFixed(1)} <span class="sensor-value-unit">%</span>`;
+    document.getElementById("humMeterBar").style.width = `${Math.min(hum, 100)}%`;
+
+    // Calculate Heat Index (Rothfusz regression simplification)
+    let hiC = tempC;
+    if (tempC >= 26.0 && hum >= 40.0) {
+      const T = (tempC * 9/5) + 32;
+      const R = hum;
+      let hiF = -42.379 + 2.04901523*T + 10.14333127*R - 0.22475541*T*R - 0.00683783*T*T - 0.05481717*R*R + 0.00122874*T*T*R + 0.00085282*T*R*R - 0.00000199*T*T*R*R;
+      hiC = (hiF - 32) * 5/9;
+    }
+
+    const isF = (config.unit === "F");
+    const hiDisplay = isF ? (hiC * 9/5) + 32 : hiC;
+    document.getElementById("heatIndexText").innerHTML = `Heat Index: ${hiDisplay.toFixed(1)}${isF ? '&deg;F' : '&deg;C'}`;
+
+    const badge = document.getElementById("humStatusBadge");
+    if (hum < 30) {
+      badge.innerText = "Dry";
+      badge.style.color = "#f59e0b";
+    } else if (hum > 65) {
+      badge.innerText = "High Humidity";
+      badge.style.color = "#38bdf8";
+    } else {
+      badge.innerText = "Optimal";
+      badge.style.color = "#10b981";
+    }
+  }
+
+  function renderAirQuality(airPct) {
+    document.getElementById("cardAirVal").innerHTML = `${airPct} <span class="sensor-value-unit">%</span>`;
+    document.getElementById("airMeterBar").style.width = `${Math.min(airPct, 100)}%`;
+
+    const badge = document.getElementById("airStatusBadge");
+    const text = document.getElementById("airStatusText");
+
+    if (airPct < 25) {
+      badge.innerText = "Clean";
+      badge.style.background = "rgba(16, 185, 129, 0.2)";
+      badge.style.color = "#10b981";
+      text.innerText = "Fresh & Healthy";
+    } else if (airPct < 55) {
+      badge.innerText = "Moderate";
+      badge.style.background = "rgba(245, 158, 11, 0.2)";
+      badge.style.color = "#f59e0b";
+      text.innerText = "Acceptable Ventilation";
+    } else {
+      badge.innerText = "Polluted";
+      badge.style.background = "rgba(239, 68, 68, 0.25)";
+      badge.style.color = "#ef4444";
+      text.innerText = "Elevated Contaminants";
+    }
+  }
+
+  function renderFanRotor(pwm, pct) {
+    document.getElementById("valPwmSpeed").innerText = `${pwm} / 255`;
+    const rpmEst = Math.round((pwm / 255) * 2200);
+    document.getElementById("valRpm").innerText = `${rpmEst} RPM`;
+
+    const fanHalo = document.getElementById("fanHalo");
+    const fanActivity = document.getElementById("fanActivityState");
+    const centerPct = document.getElementById("fanRotorPct");
+    const centerState = document.getElementById("fanRotorState");
+
+    centerPct.innerText = `${pct}%`;
+
+    if (pwm <= 0) {
+      document.documentElement.style.setProperty("--fan-speed-duration", "0s");
+      fanHalo.className = "fan-halo-ring";
+      fanActivity.innerText = "Idle";
+      fanActivity.style.color = "var(--text-dim)";
+      centerState.innerText = "OFF";
+    } else {
+      // Linear mapping from 2.2s (slow at PWM 80) down to 0.18s (fast at PWM 255)
+      const duration = Math.max(0.16, 2.2 - (pwm / 255) * 2.0);
+      document.documentElement.style.setProperty("--fan-speed-duration", `${duration.toFixed(2)}s`);
+
+      fanHalo.className = pwm > 200 ? "fan-halo-ring running turbo" : "fan-halo-ring running";
+      fanActivity.innerText = pwm > 200 ? "Turbo Power" : "Spinning";
+      fanActivity.style.color = "var(--primary)";
+      centerState.innerText = "RUN";
+    }
+  }
+
+  /* ================= USER COMMANDS & INTERACTIONS ================= */
+  function setMode(mode) {
+    playUiBeep(1200, "triangle", 0.05);
+    syncModeTabs(mode);
+    const payload = JSON.stringify({ mode: mode });
+    if (client && client.connected) {
+      client.publish(getTopicSet(), payload);
+    }
+  }
+
+  function syncModeTabs(mode) {
     activeMode = mode;
-    const btnAuto = document.getElementById("btnAuto");
-    const btnManual = document.getElementById("btnManual");
-    const slider = document.getElementById("speedSlider");
+    const tabAuto = document.getElementById("tabAuto");
+    const tabManual = document.getElementById("tabManual");
+    const manualArea = document.getElementById("manualControlsArea");
+    const autoArea = document.getElementById("autoControlsArea");
+    const valModeBadge = document.getElementById("valModeBadge");
+
+    valModeBadge.innerText = mode;
 
     if (mode === "AUTO") {
-      btnAuto.classList.add("active");
-      btnManual.classList.remove("active");
-      slider.disabled = true;
+      tabAuto.classList.add("active");
+      tabManual.classList.remove("active");
+      manualArea.style.display = "none";
+      autoArea.style.display = "block";
     } else {
-      btnManual.classList.add("active");
-      btnAuto.classList.remove("active");
-      slider.disabled = false;
+      tabManual.classList.add("active");
+      tabAuto.classList.remove("active");
+      manualArea.style.display = "block";
+      autoArea.style.display = "none";
     }
   }
 
-  function onSliderInput(val) {
-    document.getElementById("speedDisplay").innerText = `${val} / 255 (${Math.round((val/255)*100)}%)`;
+  function onManualSliderLive(val) {
+    const pct = Math.round((val / 255) * 100);
+    document.getElementById("sliderValueText").innerText = `${val} (${pct}%)`;
   }
 
   function sendManualSpeed(val) {
     if (activeMode !== "MANUAL") return;
-    const payload = JSON.stringify({ mode: "MANUAL", speed: parseInt(val, 10) });
-    client.publish(TOPIC_SET, payload);
+    playUiBeep(950, "sine", 0.04);
+    const pwm = parseInt(val, 10);
+    currentPwm = pwm;
+    if (config.simMode) {
+      renderFanRotor(currentPwm, Math.round((currentPwm / 255) * 100));
+    }
+    const payload = JSON.stringify({ mode: "MANUAL", speed: pwm });
+    if (client && client.connected) {
+      client.publish(getTopicSet(), payload);
+    }
   }
 
-  window.addEventListener("DOMContentLoaded", initMQTT);
+  function applyPreset(speed) {
+    document.getElementById("manualSpeedSlider").value = speed;
+    onManualSliderLive(speed);
+    sendManualSpeed(speed);
+  }
+
+  function onAutoThreshLive(val) {
+    document.getElementById("autoThreshValueText").innerHTML = `${Number(val).toFixed(1)} &deg;C`;
+  }
+
+  function sendAutoThreshold(val) {
+    playUiBeep(1050, "sine", 0.05);
+    const thresh = parseFloat(val);
+    simTargetTemp = thresh;
+    const payload = JSON.stringify({ auto_thresh: thresh });
+    if (client && client.connected) {
+      client.publish(getTopicSet(), payload);
+    }
+    showToast(`Thermostat threshold updated to ${thresh.toFixed(1)}°C`);
+  }
+
+  function sendBuzzerCommand(cmd) {
+    playUiBeep(700, "square", 0.09);
+    if (config.simMode) {
+      const banner = document.getElementById("alarmBanner");
+      if (cmd === "test") {
+        banner.classList.add("visible");
+        setTimeout(() => banner.classList.remove("visible"), 2000);
+      } else if (cmd === "mute") {
+        banner.classList.remove("visible");
+      }
+    }
+    const payload = JSON.stringify({ buzzer: cmd });
+    if (client && client.connected) {
+      client.publish(getTopicSet(), payload);
+    }
+    showToast(`Hardware Buzzer: ${cmd.toUpperCase()}`);
+  }
+
+  function toggleTempUnit() {
+    config.unit = (config.unit === "C") ? "F" : "C";
+    document.getElementById("lblUnitSwitch").innerText = `°${config.unit}`;
+    document.getElementById("unitSymbol").innerText = `°${config.unit}`;
+    localStorage.setItem("aerosync_config", JSON.stringify(config));
+    renderTemperature(currentRawTempC);
+    renderHumidity(currentRawHumidity, currentRawTempC);
+    showToast(`Switched unit to °${config.unit}`);
+  }
+
+  /* ================= SIMULATION MODE ================= */
+  let simTimer = null;
+  let simTargetTemp = 27.0;
+
+  function toggleSimulation(enabled) {
+    if (simTimer) {
+      clearInterval(simTimer);
+      simTimer = null;
+    }
+
+    if (enabled) {
+      setDeviceOnlineState(true);
+      document.getElementById("deviceStatusText").innerText = "Simulated Device";
+      showToast("Live simulation mode active");
+      
+      const runSimTick = () => {
+        // gently drift temperature around 26 - 31 °C
+        currentRawTempC = Math.round((currentRawTempC + (Math.random() * 0.5 - 0.23)) * 10) / 10;
+        if (currentRawTempC < 24.5) currentRawTempC = 25.2;
+        if (currentRawTempC > 31.8) currentRawTempC = 30.6;
+
+        // humidity drift
+        currentRawHumidity = Math.round((currentRawHumidity + (Math.random() * 1.0 - 0.5)) * 10) / 10;
+        currentRawHumidity = Math.max(35, Math.min(78, currentRawHumidity));
+
+        // air pollution drift
+        currentRawAir = Math.round(Math.max(8, Math.min(65, currentRawAir + (Math.random() * 4 - 2))));
+
+        // calculate fan speed if in auto mode
+        let simSpeed = currentPwm;
+        if (activeMode === "AUTO") {
+          if (currentRawTempC >= simTargetTemp) {
+            simSpeed = Math.round(80 + ((currentRawTempC - simTargetTemp) / (32.0 - simTargetTemp)) * (255 - 80));
+            simSpeed = Math.max(80, Math.min(255, simSpeed));
+          } else {
+            simSpeed = 0;
+          }
+        }
+
+        updateTelemetryUI({
+          temp: currentRawTempC,
+          humidity: currentRawHumidity,
+          air: currentRawAir,
+          mode: activeMode,
+          speed: simSpeed,
+          speed_pct: Math.round((simSpeed / 255) * 100),
+          alarm: currentRawTempC >= 30.0,
+          target_temp: simTargetTemp,
+          sensor_ok: true,
+          wifi_rssi: -58,
+          uptime: Math.floor(performance.now() / 1000)
+        });
+      };
+
+      runSimTick();
+      simTimer = setInterval(runSimTick, 2000);
+    } else {
+      if (!isHardwareOnline) {
+        setDeviceOnlineState(false);
+      }
+    }
+  }
+
+  /* ================= MODAL & SETTINGS ================= */
+  function openSettingsModal() {
+    document.getElementById("cfgDeviceId").value = config.deviceId;
+    document.getElementById("cfgBrokerUrl").value = config.brokerUrl;
+    document.getElementById("cfgTempUnit").value = config.unit;
+    document.getElementById("cfgSimMode").checked = !!config.simMode;
+    document.getElementById("settingsModal").classList.add("open");
+  }
+
+  function closeSettingsModal() {
+    document.getElementById("settingsModal").classList.remove("open");
+  }
+
+  function saveSettingsAndReconnect() {
+    const devId = document.getElementById("cfgDeviceId").value.trim() || DEFAULT_CONFIG.deviceId;
+    const bUrl = document.getElementById("cfgBrokerUrl").value.trim() || DEFAULT_CONFIG.brokerUrl;
+    const tUnit = document.getElementById("cfgTempUnit").value;
+    const simEnabled = document.getElementById("cfgSimMode").checked;
+
+    config.deviceId = devId;
+    config.brokerUrl = bUrl;
+    config.unit = tUnit;
+    config.simMode = simEnabled;
+
+    localStorage.setItem("aerosync_config", JSON.stringify(config));
+    document.getElementById("deviceSubtitle").innerText = `ESP32 Smart Fan Station • ${config.deviceId}`;
+    document.getElementById("lblUnitSwitch").innerText = `°${config.unit}`;
+    document.getElementById("unitSymbol").innerText = `°${config.unit}`;
+
+    closeSettingsModal();
+    toggleSimulation(simEnabled);
+    if (!simEnabled) {
+      showToast("Settings saved. Reconnecting to MQTT...");
+      connectMQTT();
+    }
+  }
+
+  /* ================= BOOTSTRAP INITIALIZATION ================= */
+  window.addEventListener("DOMContentLoaded", () => {
+    // Reflect saved device ID and unit
+    document.getElementById("deviceSubtitle").innerText = `ESP32 Smart Fan Station • ${config.deviceId}`;
+    document.getElementById("lblUnitSwitch").innerText = `°${config.unit}`;
+    document.getElementById("unitSymbol").innerText = `°${config.unit}`;
+
+    initChart();
+    connectMQTT();
+
+    if (config.simMode) {
+      toggleSimulation(true);
+    }
+  });
 </script>
 </body>
 </html>

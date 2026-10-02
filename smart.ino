@@ -14,9 +14,10 @@ const char* MQTT_BROKER   = "broker.emqx.io";
 const int   MQTT_PORT     = 1883;
 
 // Change "DEVICE123" to a unique string to prevent cross-talk
-const char* TOPIC_STATUS       = "smartfan/DEVICE123/status";
-const char* TOPIC_SET          = "smartfan/DEVICE123/set";
-const char* TOPIC_AVAILABILITY = "smartfan/DEVICE123/availability";
+#define DEVICE_ID "DEVICE123"
+const char* TOPIC_STATUS       = "smartfan/" DEVICE_ID "/status";
+const char* TOPIC_SET          = "smartfan/" DEVICE_ID "/set";
+const char* TOPIC_AVAILABILITY = "smartfan/" DEVICE_ID "/availability";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -35,9 +36,29 @@ const char* PREF_NAMESPACE = "smartfan";
 #define IN1_PIN 26
 #define IN2_PIN 27
 
+// Compatibility for ESP32 Arduino Core 2.x and 3.x
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  #define USE_ESP32_CORE_V3 1
+#else
+  #define USE_ESP32_CORE_V3 0
+  #define PWM_CHANNEL 0
+#endif
+
 // ================= PERIPHERALS =================
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 DHT dht(DHTPIN, DHTTYPE);
+
+// Custom degree symbol character for LCD
+byte degreeChar[8] = {
+  0b00110,
+  0b01001,
+  0b01001,
+  0b00110,
+  0b00000,
+  0b00000,
+  0b00000,
+  0b00000
+};
 
 // ================= SYSTEM STATES =================
 enum FanMode { MODE_AUTO = 0, MODE_MANUAL = 1 };
@@ -47,38 +68,65 @@ int manualSpeedTarget = 0; // 0 to 255
 int currentSpeed = 0;
 bool fanActive = false;
 
+// Auto thermostatic parameters
+float autoThresholdTemp = 27.0; // Cooling starts above this (°C)
+const float AUTO_MAX_TEMP = 32.0; // Max speed at this temp (°C)
+const float AUTO_HYSTERESIS = 0.5; // Turn off at (autoThresholdTemp - AUTO_HYSTERESIS)
+
+// Telemetry cache
+float currentTemp = 25.0;
+float currentHumidity = 50.0;
+int currentAirPercent = 0;
+int dhtConsecutiveErrors = 0;
+bool sensorFault = false;
+
+// NVS flash wear protection (debounced writing)
+bool pendingNvsSave = false;
+unsigned long nvsSaveTimer = 0;
+const unsigned long NVS_SAVE_DELAY = 3000; // write after 3s of stability
+
 // Buzzer alert state
 bool buzzerArmed = true;
 bool buzzerPlaying = false;
 unsigned long buzzerStartTime = 0;
-const unsigned long BUZZER_DURATION = 5000;
+unsigned long buzzerDuration = 5000;
+const float ALARM_TEMP_TRIGGER = 30.0;
+const float ALARM_TEMP_REARM = 29.0;
 
 // Non-blocking timers
 unsigned long lastSampleTime = 0;
 const unsigned long SAMPLE_INTERVAL = 2000;
 unsigned long lastMqttReconnect = 0;
+unsigned long lastWifiCheck = 0;
 
 // ================= FORWARD DECLARATIONS =================
 void setupWiFi();
+void checkWiFiConnection(unsigned long currentMillis);
 void reconnectMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void handleBuzzer(float temp, unsigned long currentMillis);
 int  calculateAutoSpeed(float temp);
 void applyMotorSpeed(int speed);
-void updateDisplay(float temp, int speed, int airPercent);
-void publishStatus(float temp, int airPercent, int speed);
+void writePwm(int duty);
+void updateDisplay(float temp, float hum, int speed, int airPercent);
+void publishStatus(float temp, float hum, int airPercent, int speed);
 void handleSensorError();
 
 // ================= SETUP =================
 void setup() {
   Serial.begin(115200);
+  delay(100);
+  Serial.println("\n[SYSTEM] Initializing Smart Fan System...");
 
   // LCD Initialization
   Wire.begin(21, 22);
   lcd.init();
   lcd.backlight();
+  lcd.createChar(0, degreeChar);
   lcd.setCursor(0, 0);
-  lcd.print("Smart Fan Init");
+  lcd.print("Smart Fan v2.0");
+  lcd.setCursor(0, 1);
+  lcd.print("Booting...");
 
   // DHT & Analog Input
   dht.begin();
@@ -91,9 +139,15 @@ void setup() {
   digitalWrite(IN1_PIN, LOW);
   digitalWrite(IN2_PIN, LOW);
 
-  // ESP32 Core v3.x PWM
+  // PWM Initialization (Core 2.x & 3.x compatible)
+#if USE_ESP32_CORE_V3
   ledcAttach(ENA_PIN, 5000, 8);
   ledcWrite(ENA_PIN, 0);
+#else
+  ledcSetup(PWM_CHANNEL, 5000, 8);
+  ledcAttachPin(ENA_PIN, PWM_CHANNEL);
+  ledcWrite(PWM_CHANNEL, 0);
+#endif
 
   // Buzzer Pin
   pinMode(BUZZER_PIN, OUTPUT);
@@ -104,18 +158,19 @@ void setup() {
   uint8_t savedMode = preferences.getUChar("mode", (uint8_t)MODE_AUTO);
   currentMode = (savedMode == (uint8_t)MODE_MANUAL) ? MODE_MANUAL : MODE_AUTO;
   manualSpeedTarget = preferences.getInt("speed", 0);
+  autoThresholdTemp = preferences.getFloat("auto_th", 27.0);
 
-  Serial.printf("[NVS] Loaded -> Mode: %s | Manual Speed: %d\n",
+  Serial.printf("[NVS] Loaded -> Mode: %s | Speed: %d | AutoThresh: %.1fC\n",
                 (currentMode == MODE_AUTO) ? "AUTO" : "MANUAL",
-                manualSpeedTarget);
+                manualSpeedTarget,
+                autoThresholdTemp);
 
   // Wi-Fi & MQTT Configuration
   setupWiFi();
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
-
-  // Method 1: Set MQTT Keep-Alive to 4s (broker triggers LWT at 4 * 1.5 = 6s)
-  mqttClient.setKeepAlive(4);
+  mqttClient.setKeepAlive(15);
+  mqttClient.setSocketTimeout(3); // Non-blocking socket timeout
 
   lcd.clear();
 }
@@ -124,108 +179,153 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Maintain Wi-Fi and MQTT connectivity
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!mqttClient.connected()) {
-      if (currentMillis - lastMqttReconnect > 5000) {
-        lastMqttReconnect = currentMillis;
-        reconnectMQTT();
-      }
-    } else {
-      mqttClient.loop();
-    }
-  }
+  // 1. Maintain Wi-Fi and MQTT connectivity (Non-blocking)
+  checkWiFiConnection(currentMillis);
 
-  // Handle buzzer shutoff timing
-  if (buzzerPlaying && (currentMillis - buzzerStartTime >= BUZZER_DURATION)) {
+  // 2. Handle buzzer shutoff timing
+  if (buzzerPlaying && (currentMillis - buzzerStartTime >= buzzerDuration)) {
     digitalWrite(BUZZER_PIN, LOW);
     buzzerPlaying = false;
   }
 
-  // Periodic sensor read, fan control, and MQTT publishing
+  // 3. Debounced NVS flash saving to prevent flash wear
+  if (pendingNvsSave && (currentMillis - nvsSaveTimer >= NVS_SAVE_DELAY)) {
+    preferences.putInt("speed", manualSpeedTarget);
+    preferences.putFloat("auto_th", autoThresholdTemp);
+    pendingNvsSave = false;
+    Serial.printf("[NVS] Debounced parameters committed to flash.\n");
+  }
+
+  // 4. Periodic sensor sampling, fan control, and MQTT publishing
   if (currentMillis - lastSampleTime >= SAMPLE_INTERVAL) {
     lastSampleTime = currentMillis;
 
-    float temperature = dht.readTemperature();
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
     int airRaw = analogRead(AIR_SENSOR_PIN);
-    int airPercent = constrain(map(airRaw, 0, 4095, 0, 100), 0, 100);
+    currentAirPercent = constrain(map(airRaw, 0, 4095, 0, 100), 0, 100);
 
-    if (isnan(temperature)) {
-      handleSensorError();
-      return;
+    // Resilient DHT reading: filter transient glitches
+    if (isnan(t) || isnan(h)) {
+      dhtConsecutiveErrors++;
+      Serial.printf("[WARN] DHT read glitch (%d/3)\n", dhtConsecutiveErrors);
+      if (dhtConsecutiveErrors >= 3) {
+        sensorFault = true;
+        handleSensorError();
+        publishStatus(currentTemp, currentHumidity, currentAirPercent, 0);
+        return;
+      }
+      // If glitch is transient, keep previous valid values and continue loop
+    } else {
+      dhtConsecutiveErrors = 0;
+      sensorFault = false;
+      currentTemp = t;
+      currentHumidity = h;
     }
 
     // Safety Buzzer check
-    handleBuzzer(temperature, currentMillis);
+    handleBuzzer(currentTemp, currentMillis);
 
     // Motor Arbitration
     if (currentMode == MODE_AUTO) {
-      currentSpeed = calculateAutoSpeed(temperature);
+      currentSpeed = calculateAutoSpeed(currentTemp);
     } else {
       currentSpeed = manualSpeedTarget;
     }
     applyMotorSpeed(currentSpeed);
 
     // Refresh UI & Telemetry
-    updateDisplay(temperature, currentSpeed, airPercent);
-    publishStatus(temperature, airPercent, currentSpeed);
+    updateDisplay(currentTemp, currentHumidity, currentSpeed, currentAirPercent);
+    publishStatus(currentTemp, currentHumidity, currentAirPercent, currentSpeed);
   }
 }
 
 // ================= MOTOR CONTROL =================
+void writePwm(int duty) {
+#if USE_ESP32_CORE_V3
+  ledcWrite(ENA_PIN, duty);
+#else
+  ledcWrite(PWM_CHANNEL, duty);
+#endif
+}
+
 int calculateAutoSpeed(float temp) {
-  // Hysteresis deadband: turns on at 27.0°C, shuts off below 26.5°C
+  float offThreshold = autoThresholdTemp - AUTO_HYSTERESIS;
+
+  // Hysteresis deadband to prevent rapid cycling
   if (fanActive) {
-    if (temp < 26.5) fanActive = false;
+    if (temp < offThreshold) fanActive = false;
   } else {
-    if (temp >= 27.0) fanActive = true;
+    if (temp >= autoThresholdTemp) fanActive = true;
   }
 
   if (!fanActive) return 0;
 
-  // Scale speed from PWM 80 (27.0°C) to PWM 255 (32.0°C)
-  int speed = map((int)(temp * 10), 270, 320, 80, 255);
+  // Linear scaling from PWM 80 to PWM 255 between autoThresholdTemp and AUTO_MAX_TEMP
+  int speed = map((int)(temp * 10), (int)(autoThresholdTemp * 10), (int)(AUTO_MAX_TEMP * 10), 80, 255);
   return constrain(speed, 80, 255);
 }
 
 void applyMotorSpeed(int speed) {
+  speed = constrain(speed, 0, 255);
+
   if (speed <= 0) {
     digitalWrite(IN1_PIN, LOW);
     digitalWrite(IN2_PIN, LOW);
-    ledcWrite(ENA_PIN, 0);
+    writePwm(0);
+    fanActive = false;
   } else {
     digitalWrite(IN1_PIN, HIGH);
     digitalWrite(IN2_PIN, LOW);
-    ledcWrite(ENA_PIN, speed);
+
+    // Kickstart pulse to overcome DC motor static friction if starting from zero
+    if (currentSpeed == 0 && speed > 0 && speed < 110) {
+      writePwm(180);
+      delay(40); // very brief kickstart pulse
+    }
+
+    writePwm(speed);
   }
+  currentSpeed = speed;
 }
 
 // ================= BUZZER =================
 void handleBuzzer(float temp, unsigned long currentMillis) {
-  // Sound alarm once upon hitting 30.0°C
-  if (temp >= 30.0 && buzzerArmed && !buzzerPlaying) {
+  // Sound alarm once upon hitting critical threshold
+  if (temp >= ALARM_TEMP_TRIGGER && buzzerArmed && !buzzerPlaying) {
     digitalWrite(BUZZER_PIN, HIGH);
     buzzerStartTime = currentMillis;
+    buzzerDuration = 5000;
     buzzerPlaying = true;
     buzzerArmed = false;
+    Serial.println("[ALARM] Over-temperature triggered!");
   }
 
-  // Re-arm when temperature drops below 29.0°C
-  if (temp < 29.0) {
+  // Re-arm when temperature safely cools down
+  if (temp < ALARM_TEMP_REARM) {
     buzzerArmed = true;
   }
 }
 
 // ================= DISPLAY =================
-void updateDisplay(float temp, int speed, int airPercent) {
-  char line0[17];
+void updateDisplay(float temp, float hum, int speed, int airPercent) {
   char modeChar = (currentMode == MODE_AUTO) ? 'A' : 'M';
-  snprintf(line0, sizeof(line0), "%c T:%4.1f%cC F:%-3d", modeChar, temp, (char)223, speed);
+  char netChar  = mqttClient.connected() ? '*' : (WiFi.status() == WL_CONNECTED ? 'w' : 'x');
+
+  // Line 0: "A 28.5[deg]C H:55% *" (16 chars)
+  char line0[17];
+  snprintf(line0, sizeof(line0), "%c %4.1f%cC H:%2.0f%% %c",
+           modeChar, temp, (char)0, hum, netChar);
   lcd.setCursor(0, 0);
   lcd.print(line0);
 
+  // Line 1: Speed PWM and Air Pollution
   char line1[17];
-  snprintf(line1, sizeof(line1), "Air:%3d%%        ", airPercent);
+  if (buzzerPlaying) {
+    snprintf(line1, sizeof(line1), "** TEMP ALARM! **");
+  } else {
+    snprintf(line1, sizeof(line1), "PWM:%-3d Air:%2d%%  ", speed, airPercent);
+  }
   lcd.setCursor(0, 1);
   lcd.print(line1);
 }
@@ -233,29 +333,54 @@ void updateDisplay(float temp, int speed, int airPercent) {
 void handleSensorError() {
   applyMotorSpeed(0);
   lcd.setCursor(0, 0);
-  lcd.print("Sensor Read Err ");
+  lcd.print("! SENSOR ERROR !");
   lcd.setCursor(0, 1);
-  lcd.print("Fan Halted      ");
-  Serial.println("[ERR] DHT22 failure! Motor halted.");
+  lcd.print("Fan Halted Safely");
+  Serial.println("[ERR] Persistent DHT22 failure! Motor halted for safety.");
 }
 
 // ================= NETWORKING & MQTT =================
 void setupWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
+  Serial.print("[WiFi] Connecting");
 
   int retries = 0;
   while (WiFi.status() != WL_CONNECTED && retries < 20) {
-    delay(500);
+    delay(400);
     Serial.print(".");
     retries++;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\nWi-Fi connected. IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("\n[WiFi] Connected! IP: %s | RSSI: %d dBm\n",
+                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
   } else {
-    Serial.println("\nWi-Fi connection failed. Will retry in background.");
+    Serial.println("\n[WiFi] Initial connection failed. Automatic background retry active.");
+  }
+}
+
+void checkWiFiConnection(unsigned long currentMillis) {
+  // Non-blocking WiFi reconnect check
+  if (WiFi.status() != WL_CONNECTED) {
+    if (currentMillis - lastWifiCheck > 10000) {
+      lastWifiCheck = currentMillis;
+      Serial.println("[WiFi] Lost connection. Attempting reconnect...");
+      WiFi.reconnect();
+    }
+    return;
+  }
+
+  // Handle MQTT reconnect if WiFi is healthy
+  if (!mqttClient.connected()) {
+    if (currentMillis - lastMqttReconnect > 5000) {
+      lastMqttReconnect = currentMillis;
+      reconnectMQTT();
+    }
+  } else {
+    mqttClient.loop();
   }
 }
 
@@ -271,30 +396,41 @@ void reconnectMQTT() {
   boolean     willRetain  = true;
   const char* willMessage = "offline";
 
-  Serial.print("Attempting MQTT connection...");
+  Serial.print("[MQTT] Connecting to broker...");
   if (mqttClient.connect(clientId.c_str(), willTopic, willQoS, willRetain, willMessage)) {
-    Serial.println(" connected.");
+    Serial.println(" Connected successfully.");
 
     // Announce online status with retain flag set
     mqttClient.publish(TOPIC_AVAILABILITY, "online", true);
 
     // Subscribe to incoming commands
     mqttClient.subscribe(TOPIC_SET);
+
+    // Immediate status broadcast on connect
+    publishStatus(currentTemp, currentHumidity, currentAirPercent, currentSpeed);
   } else {
-    Serial.printf(" failed, rc=%d. Retrying in 5 seconds.\n", mqttClient.state());
+    Serial.printf(" Failed, state=%d. Retrying in 5s.\n", mqttClient.state());
   }
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  StaticJsonDocument<256> doc;
+  // Compatible with ArduinoJson v6 and v7
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument doc;
+#else
+  StaticJsonDocument<384> doc;
+#endif
+
   DeserializationError error = deserializeJson(doc, payload, length);
   if (error) {
     Serial.printf("[JSON] Deserialization error: %s\n", error.c_str());
     return;
   }
 
-  // Parse mode switch command
-  if (doc.containsKey("mode")) {
+  bool stateChanged = false;
+
+  // 1. Mode command
+  if (doc["mode"].is<const char*>()) {
     const char* modeStr = doc["mode"];
     FanMode newMode = currentMode;
 
@@ -304,38 +440,92 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       newMode = MODE_MANUAL;
     }
 
-    // Write to flash only if changed
     if (newMode != currentMode) {
       currentMode = newMode;
       preferences.putUChar("mode", (uint8_t)currentMode);
-      Serial.printf("[NVS] Mode changed and saved: %s\n", modeStr);
+      stateChanged = true;
+      Serial.printf("[CMD] Mode changed to: %s\n", (currentMode == MODE_AUTO) ? "AUTO" : "MANUAL");
     }
   }
 
-  // Parse manual speed command
-  if (doc.containsKey("speed")) {
+  // 2. Manual speed command
+  if (doc["speed"].is<int>()) {
     int newSpeed = constrain(doc["speed"].as<int>(), 0, 255);
-
-    // Write to flash only if changed
     if (newSpeed != manualSpeedTarget) {
       manualSpeedTarget = newSpeed;
-      preferences.putInt("speed", manualSpeedTarget);
-      Serial.printf("[NVS] Speed changed and saved: %d\n", manualSpeedTarget);
+      pendingNvsSave = true;
+      nvsSaveTimer = millis();
+      stateChanged = true;
+      Serial.printf("[CMD] Target speed updated: %d\n", manualSpeedTarget);
     }
+  }
+
+  // 3. Auto target temperature threshold command
+  if (doc["auto_thresh"].is<float>()) {
+    float newThresh = constrain(doc["auto_thresh"].as<float>(), 20.0, 38.0);
+    if (abs(newThresh - autoThresholdTemp) > 0.1) {
+      autoThresholdTemp = newThresh;
+      pendingNvsSave = true;
+      nvsSaveTimer = millis();
+      stateChanged = true;
+      Serial.printf("[CMD] Auto Threshold updated: %.1fC\n", autoThresholdTemp);
+    }
+  }
+
+  // 4. Buzzer test / mute command
+  if (doc["buzzer"].is<const char*>()) {
+    const char* bcmd = doc["buzzer"];
+    if (strcasecmp(bcmd, "test") == 0) {
+      digitalWrite(BUZZER_PIN, HIGH);
+      buzzerStartTime = millis();
+      buzzerDuration = 1000; // 1s test beep
+      buzzerPlaying = true;
+      stateChanged = true;
+    } else if (strcasecmp(bcmd, "mute") == 0) {
+      digitalWrite(BUZZER_PIN, LOW);
+      buzzerPlaying = false;
+      buzzerArmed = false; // Stay muted until re-armed
+      stateChanged = true;
+    }
+  }
+
+  // 5. Immediate response if state changed (zero UI lag)
+  if (stateChanged) {
+    if (currentMode == MODE_AUTO) {
+      currentSpeed = calculateAutoSpeed(currentTemp);
+    } else {
+      currentSpeed = manualSpeedTarget;
+    }
+    applyMotorSpeed(currentSpeed);
+    updateDisplay(currentTemp, currentHumidity, currentSpeed, currentAirPercent);
+    publishStatus(currentTemp, currentHumidity, currentAirPercent, currentSpeed);
   }
 }
 
-void publishStatus(float temp, int airPercent, int speed) {
+void publishStatus(float temp, float hum, int airPercent, int speed) {
   if (!mqttClient.connected()) return;
 
-  StaticJsonDocument<256> doc;
-  doc["temp"] = serialized(String(temp, 1));
-  doc["air"] = airPercent;
-  doc["mode"] = (currentMode == MODE_AUTO) ? "AUTO" : "MANUAL";
-  doc["speed"] = speed;
-  doc["alarm"] = buzzerPlaying;
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument doc;
+#else
+  StaticJsonDocument<384> doc;
+#endif
 
-  char buffer[256];
+  // Clean numeric JSON values
+  doc["temp"]         = (float)((int)(temp * 10.0 + 0.5)) / 10.0;
+  doc["humidity"]     = (float)((int)(hum * 10.0 + 0.5)) / 10.0;
+  doc["air"]          = airPercent;
+  doc["mode"]         = (currentMode == MODE_AUTO) ? "AUTO" : "MANUAL";
+  doc["speed"]        = speed;
+  doc["speed_pct"]    = (int)map(speed, 0, 255, 0, 100);
+  doc["alarm"]        = buzzerPlaying;
+  doc["buzzer_armed"] = buzzerArmed;
+  doc["target_temp"]  = (float)((int)(autoThresholdTemp * 10.0 + 0.5)) / 10.0;
+  doc["sensor_ok"]    = !sensorFault;
+  doc["wifi_rssi"]    = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+  doc["uptime"]       = millis() / 1000;
+
+  char buffer[384];
   size_t len = serializeJson(doc, buffer);
   mqttClient.publish(TOPIC_STATUS, buffer, len);
 }
