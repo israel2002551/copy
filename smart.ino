@@ -5,6 +5,8 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 // ================= NETWORK & MQTT CONFIG =================
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
@@ -117,6 +119,9 @@ void handleSensorError();
 
 // ================= SETUP =================
 void setup() {
+  // Disable ESP32 brownout detector to prevent reset on Wi-Fi RF power surge
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
   Serial.begin(115200);
   delay(300);
 
@@ -387,6 +392,12 @@ void setupWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
+
+  // Reduce RF transmitter power from maximum (19.5dBm, ~400mA spike) to 11dBm (~120mA).
+  // This prevents power rail voltage sags and brownouts while easily maintaining Wi-Fi connectivity.
+  WiFi.setTxPower(WIFI_POWER_11dBm);
+  delay(100);
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.printf("[WiFi] Connecting to \"%s\"", WIFI_SSID);
 
