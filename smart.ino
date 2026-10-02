@@ -388,41 +388,86 @@ void handleSensorError() {
 }
 
 // ================= NETWORKING & MQTT =================
+const char* getWiFiStatusName(wl_status_t status) {
+  switch (status) {
+    case WL_NO_SSID_AVAIL: return "SSID Not Found (Ensure network is 2.4 GHz; ESP32 cannot see 5 GHz)";
+    case WL_CONNECT_FAILED: return "Connection Failed (Check password or router security)";
+    case WL_CONNECTION_LOST: return "Connection Lost";
+    case WL_DISCONNECTED: return "Disconnected";
+    case WL_IDLE_STATUS: return "Idle";
+    case WL_SCAN_COMPLETED: return "Scan Completed";
+    case WL_CONNECTED: return "Connected";
+    default: return "Unknown";
+  }
+}
+
 void setupWiFi() {
+  // Check if user still has placeholder credentials
+  if (strcmp(WIFI_SSID, "YOUR_WIFI_SSID") == 0) {
+    Serial.println("\n*************************************************************");
+    Serial.println("  [!] CONFIGURATION REQUIRED: WIFI_SSID is set to placeholder!");
+    Serial.println("  Please update lines 12 & 13 in smart.ino with your actual");
+    Serial.println("  Wi-Fi network name (SSID) and Password.");
+    Serial.println("*************************************************************");
+  }
+
+  // Clean reset of Wi-Fi stack
+  WiFi.disconnect(true);
+  delay(150);
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
 
-  // Reduce RF transmitter power from maximum (19.5dBm, ~400mA spike) to 11dBm (~120mA).
-  // This prevents power rail voltage sags and brownouts while easily maintaining Wi-Fi connectivity.
-  WiFi.setTxPower(WIFI_POWER_11dBm);
+  // Set RF power to 15dBm for balanced range without aggressive inrush current spikes
+  WiFi.setTxPower(WIFI_POWER_15dBm);
   delay(100);
 
+  Serial.printf("[WiFi] Initiating connection to \"%s\"...\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.printf("[WiFi] Connecting to \"%s\"", WIFI_SSID);
 
   int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 20) {
+  while (WiFi.status() != WL_CONNECTED && retries < 25) {
     delay(400);
     Serial.print(".");
     retries++;
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\n[WiFi] Connected! IP: %s | RSSI: %d dBm\n",
+  wl_status_t status = WiFi.status();
+  if (status == WL_CONNECTED) {
+    Serial.printf("\n[WiFi] Connected successfully! IP: %s | Signal: %d dBm\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
   } else {
-    Serial.println("\n[WiFi] Initial connection failed. Automatic background retry active.");
+    Serial.printf("\n[WiFi] Connection unsuccessful. Status: %s (code %d)\n",
+                  getWiFiStatusName(status), status);
+
+    // Diagnostic: scan and print visible 2.4 GHz networks to help user troubleshoot
+    Serial.println("[WiFi] Scanning for available 2.4 GHz networks in range...");
+    int numNetworks = WiFi.scanNetworks();
+    if (numNetworks == 0) {
+      Serial.println("  No 2.4 GHz networks detected. Check ESP32 antenna / router proximity.");
+    } else {
+      Serial.printf("  Found %d networks:\n", numNetworks);
+      for (int i = 0; i < numNetworks && i < 8; ++i) {
+        Serial.printf("    [%d] \"%s\" | Signal: %d dBm%s\n",
+                      i + 1,
+                      WiFi.SSID(i).c_str(),
+                      WiFi.RSSI(i),
+                      (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? " [OPEN]" : " [SECURED]");
+      }
+    }
+    Serial.println("[WiFi] Automatic background retry will continue in the background.\n");
   }
 }
 
 void checkWiFiConnection(unsigned long currentMillis) {
   // Non-blocking WiFi reconnect check
   if (WiFi.status() != WL_CONNECTED) {
-    if (currentMillis - lastWifiCheck > 10000) {
+    if (currentMillis - lastWifiCheck > 12000) {
       lastWifiCheck = currentMillis;
-      Serial.println("[WiFi] Lost connection. Attempting reconnect...");
-      WiFi.reconnect();
+      Serial.printf("[WiFi] Attempting background reconnection to \"%s\"...\n", WIFI_SSID);
+      WiFi.disconnect();
+      delay(50);
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     }
     return;
   }
